@@ -1461,7 +1461,15 @@
 
     <script>
         // ==================== Socket.io Connection ====================
-        const socket = io();
+        const backendURL = 'https://duduk-sebentar-production.up.railway.app';
+        const socket = io(backendURL, {
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            reconnectionAttempts: 5,
+            secure: true,
+            rejectUnauthorized: false
+        });
 
         // ==================== DOM Elements ====================
         const elements = {
