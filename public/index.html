@@ -200,7 +200,6 @@
             animation: fadeInUp 0.8s ease-out 0.2s backwards;
             position: relative;
             overflow: hidden;
-            z-index: 10; /* TAMBAHKAN INI */
         }
 
         .main-card::before {
@@ -542,7 +541,6 @@
             background: var(--cream);
             border-radius: 50%;
             opacity: 0.5;
-            z-index: -1; /* TAMBAHKAN INI - pastikan decoration di belakang */
         }
 
         /* Footer */
@@ -1181,11 +1179,6 @@
             animation: cardEnter 0.5s ease-out;
         }
 
-        .btn, .btn-response, .toggle-btn {
-            touch-action: manipulation; /* TAMBAHKAN INI - mencegah double-tap zoom di mobile */
-            -webkit-tap-highlight-color: transparent; /* TAMBAHKAN INI - hilangkan highlight di mobile */
-        }
-
         @keyframes cardEnter {
             0% {
                 opacity: 0;
@@ -1618,7 +1611,6 @@
         }
 
         // ==================== Create Room ====================
-        // ==================== Create Room ====================
         function createRoom() {
             if (!validateInput(elements.userName, 'Masukkan nama kamu dulu ya! 😊')) return;
             if (!validateInput(elements.roomName, 'Kasih nama room-nya dong! 🏠')) return;
@@ -1628,19 +1620,10 @@
 
             state.myName = elements.userName.value.trim();
 
-            // TAMBAHKAN TIMEOUT - re-enable button setelah 10 detik jika tidak ada response
-            const timeoutId = setTimeout(() => {
-                elements.createRoomBtn.disabled = false;
-                elements.createRoomBtn.textContent = 'Bikin Room ✨';
-                showToast('Koneksi timeout. Coba lagi ya!');
-            }, 15000);
-
             socket.emit('create-room', {
                 roomName: elements.roomName.value.trim(),
                 userName: state.myName
             }, (response) => {
-                clearTimeout(timeoutId); // CLEAR TIMEOUT jika berhasil
-                
                 if (response.success) {
                     state.roomCreated = true;
                     state.currentRoomCode = response.roomCode;
@@ -1655,6 +1638,7 @@
                     elements.createRoomBtn.classList.remove('btn-primary');
                     elements.createRoomBtn.classList.add('btn-secondary');
 
+                    // Disable toggle buttons setelah room dibuat
                     elements.joinToggle.disabled = true;
                     elements.joinToggle.style.opacity = '0.4';
                     elements.joinToggle.style.cursor = 'not-allowed';
@@ -1687,19 +1671,10 @@
 
             state.myName = elements.userName.value.trim();
 
-            // TAMBAHKAN TIMEOUT - re-enable button setelah 10 detik jika tidak ada response
-            const timeoutId = setTimeout(() => {
-                elements.joinRoomBtn.disabled = false;
-                elements.joinRoomBtn.textContent = 'Masuk Room 🚀';
-                showToast('Koneksi timeout. Coba lagi ya!');
-            }, 15000);
-
             socket.emit('join-room', {
                 roomCode: code,
                 userName: state.myName
             }, (response) => {
-                clearTimeout(timeoutId); // CLEAR TIMEOUT jika berhasil
-                
                 if (response.success) {
                     state.currentRoomCode = code;
                     state.isHost = false;
@@ -1708,6 +1683,7 @@
                     elements.codeSuccess.classList.add('show');
                     showToast(`Terhubung dengan room ${response.room.name}! 🎊`);
 
+                    // Auto ready for guest
                     setTimeout(() => {
                         socket.emit('player-ready', { roomCode: code });
                     }, 500);
@@ -1909,27 +1885,12 @@
             updateGameUI(data);
             switchScreen('gameScreen');
             showToast('Game dimulai! 🎮');
-
-            if (data.yourTurn) {
-                setTimeout(() => {
-                    elements.btnLike.disabled = false;
-                    elements.btnDislike.disabled = false;
-                }, 100);
-            }
         });
 
         socket.on('next-turn', (data) => {
             elements.btnLike.disabled = false;
             elements.btnDislike.disabled = false;
             updateGameUI(data);
-
-
-            if (data.yourTurn) {
-                setTimeout(() => {
-                    elements.btnLike.disabled = false;
-                    elements.btnDislike.disabled = false;
-                }, 100);
-            }
         });
 
         socket.on('game-over', (data) => {
