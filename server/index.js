@@ -442,31 +442,141 @@ io.on('connection', (socket) => {
     });
 
     // Disconnect
+
+    // Rejoin Room (untuk reconnect setelah disconnect)
+    socket.on('rejoin-room', ({ roomCode, userName, isHost }, callback) => {
+        const room = rooms.get(roomCode);
+        
+        if (!room) {
+            return callback({ success: false, error: 'Room tidak ditemukan' });
+        }
+
+        if (isHost) {
+            // Reconnect as host
+            if (room.host.name === userName) {
+                room.host.socketId = socket.id;
+                room.host.disconnectedAt = null;
+                socket.join(roomCode);
+                console.log(`🔄 Host reconnected to room: ${roomCode}`);
+
+                callback({
+                    success: true,
+                    room: {
+                        code: room.code,
+                        name: room.name,
+                        hostName: room.host.name,
+                        guestName: room.guest?.name || null,
+                        gameStarted: room.gameState.started,
+                        currentCardIndex: room.gameState.currentCardIndex
+                    }
+                });
+
+                // If game was in progress, resync game state
+                if (room.gameState.started && room.guest?.socketId) {
+                    const currentCard = room.gameState.cards[room.gameState.currentCardIndex];
+                    const hostTurn = room.gameState.currentTurn === 'host';
+                    
+                    socket.emit('game-resync', {
+                        yourTurn: hostTurn,
+                        card: hostTurn ? currentCard : null,
+                        partnerName: room.guest.name,
+                        roundNumber: room.gameState.currentCardIndex + 1,
+                        totalRounds: room.gameState.totalRounds
+                    });
+                }
+            } else {
+                callback({ success: false, error: 'Nama tidak cocok' });
+            }
+        } else {
+            // Reconnect as guest
+            if (room.guest && room.guest.name === userName) {
+                room.guest.socketId = socket.id;
+                room.guest.disconnectedAt = null;
+                socket.join(roomCode);
+                console.log(`🔄 Guest reconnected to room: ${roomCode}`);
+
+                callback({
+                    success: true,
+                    room: {
+                        code: room.code,
+                        name: room.name,
+                        hostName: room.host.name,
+                        guestName: room.guest.name,
+                        gameStarted: room.gameState.started,
+                        currentCardIndex: room.gameState.currentCardIndex
+                    }
+                });
+
+                // If game was in progress, resync game state
+                if (room.gameState.started && room.host.socketId) {
+                    const currentCard = room.gameState.cards[room.gameState.currentCardIndex];
+                    const guestTurn = room.gameState.currentTurn === 'guest';
+                    
+                    socket.emit('game-resync', {
+                        yourTurn: guestTurn,
+                        card: guestTurn ? currentCard : null,
+                        partnerName: room.host.name,
+                        roundNumber: room.gameState.currentCardIndex + 1,
+                        totalRounds: room.gameState.totalRounds
+                    });
+                }
+            } else {
+                callback({ success: false, error: 'Anda bukan guest di room ini' });
+            }
+        }
+    });
+
+    // Disconnect
     socket.on('disconnect', () => {
         console.log(`🔌 User disconnected: ${socket.id}`);
 
-        // Find and clean up any rooms this user was in
+        // Find rooms this user was in
         for (const [code, room] of rooms.entries()) {
             if (room.host.socketId === socket.id) {
-                // Host left - notify guest and delete room
-                if (room.guest) {
-                    io.to(room.guest.socketId).emit('partner-disconnected', {
-                        message: 'Host meninggalkan room'
-                    });
-                }
-                rooms.delete(code);
-                console.log(`🗑️ Room deleted: ${code} (host left) | Active rooms: ${rooms.size}`);
+                // Host disconnected - set grace period instead of immediate delete
+                console.log(`⏳ Host disconnected from room: ${code} - starting grace period`);
+                room.host.disconnectedAt = Date.now();
+                room.host.socketId = null; // Clear socket but keep room
+
+                // Set timeout to delete room if host doesn't reconnect
+                setTimeout(() => {
+                    const currentRoom = rooms.get(code);
+                    if (currentRoom && currentRoom.host.socketId === null) {
+                        // Host didn't reconnect - notify guest and delete
+                        if (currentRoom.guest && currentRoom.guest.socketId) {
+                            io.to(currentRoom.guest.socketId).emit('partner-disconnected', {
+                                message: 'Host meninggalkan room'
+                            });
+                        }
+                        rooms.delete(code);
+                        console.log(`🗑️ Room deleted after grace period: ${code} | Active rooms: ${rooms.size}`);
+                    }
+                }, 30000); // 30 second grace period
+
             } else if (room.guest && room.guest.socketId === socket.id) {
-                // Guest left - notify host
-                io.to(room.host.socketId).emit('partner-disconnected', {
-                    message: 'Partner meninggalkan room'
-                });
-                room.guest = null;
-                room.host.ready = false;
-                room.gameState.started = false;
-                room.gameState.currentCardIndex = 0;
-                room.gameState.responses = [];
-                console.log(`👋 Guest left room: ${code} | Active rooms: ${rooms.size}`);
+                // Guest disconnected - set grace period
+                console.log(`⏳ Guest disconnected from room: ${code} - starting grace period`);
+                room.guest.disconnectedAt = Date.now();
+                room.guest.socketId = null;
+
+                // Set timeout for guest reconnection
+                setTimeout(() => {
+                    const currentRoom = rooms.get(code);
+                    if (currentRoom && currentRoom.guest && currentRoom.guest.socketId === null) {
+                        // Guest didn't reconnect - notify host
+                        if (currentRoom.host.socketId) {
+                            io.to(currentRoom.host.socketId).emit('partner-disconnected', {
+                                message: 'Partner meninggalkan room'
+                            });
+                        }
+                        currentRoom.guest = null;
+                        currentRoom.host.ready = false;
+                        currentRoom.gameState.started = false;
+                        currentRoom.gameState.currentCardIndex = 0;
+                        currentRoom.gameState.responses = [];
+                        console.log(`👋 Guest removed after grace period: ${code}`);
+                    }
+                }, 30000); // 30 second grace period
             }
         }
     });
