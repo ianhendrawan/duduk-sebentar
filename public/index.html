@@ -1536,6 +1536,7 @@
         };
 
         // ==================== State ====================
+        // ==================== State ====================
         let state = {
             currentMode: 'create',
             roomCreated: false,
@@ -1544,6 +1545,136 @@
             partnerName: '',
             myName: ''
         };
+
+        // Save state to localStorage for reconnection
+        function saveState() {
+            if (state.currentRoomCode) {
+                localStorage.setItem('dudukSebentar_state', JSON.stringify({
+                    roomCode: state.currentRoomCode,
+                    isHost: state.isHost,
+                    myName: state.myName,
+                    partnerName: state.partnerName,
+                    timestamp: Date.now()
+                }));
+            }
+        }
+
+        // Clear saved state
+        function clearSavedState() {
+            localStorage.removeItem('dudukSebentar_state');
+        }
+
+        // Load and attempt reconnection
+        function attemptReconnect() {
+            const saved = localStorage.getItem('dudukSebentar_state');
+            if (!saved) return;
+
+            const data = JSON.parse(saved);
+            
+            // Only reconnect if saved within last 5 minutes
+            if (Date.now() - data.timestamp > 5 * 60 * 1000) {
+                clearSavedState();
+                return;
+            }
+
+            console.log('🔄 Attempting to reconnect to room:', data.roomCode);
+            
+            socket.emit('rejoin-room', {
+                roomCode: data.roomCode,
+                userName: data.myName,
+                isHost: data.isHost
+            }, (response) => {
+                if (response.success) {
+                    console.log('✅ Reconnected successfully!');
+                    state.currentRoomCode = data.roomCode;
+                    state.isHost = data.isHost;
+                    state.myName = data.myName;
+                    state.partnerName = data.partnerName;
+                    state.roomCreated = true;
+
+                    showToast('Terhubung kembali! 🔄');
+
+                    // If game was in progress, stay on game screen
+                    if (response.room.gameStarted) {
+                        switchScreen('gameScreen');
+                        elements.partnerNameGame.textContent = state.partnerName;
+                    }
+                } else {
+                    console.log('❌ Reconnect failed:', response.error);
+                    clearSavedState();
+                }
+            });
+        }
+
+        // ==================== Visibility & Reconnection Handlers ====================
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                console.log('📱 Page became visible');
+                
+                // Force reconnect socket if disconnected
+                if (!socket.connected) {
+                    console.log('🔌 Socket disconnected, reconnecting...');
+                    socket.connect();
+                }
+                
+                // Small delay to ensure socket is connected before rejoin
+                setTimeout(() => {
+                    if (socket.connected && state.currentRoomCode) {
+                        // Re-emit rejoin to ensure we're still in the room
+                        socket.emit('rejoin-room', {
+                            roomCode: state.currentRoomCode,
+                            userName: state.myName,
+                            isHost: state.isHost
+                        }, (response) => {
+                            if (response.success) {
+                                console.log('✅ Re-synced with room');
+                            } else {
+                                console.log('❌ Room no longer exists');
+                                clearSavedState();
+                                showToast('Room sudah tidak ada 😢');
+                                resetGame();
+                            }
+                        });
+                    }
+                }, 500);
+            }
+        });
+
+        // Handle page focus (additional safety for mobile)
+        window.addEventListener('focus', () => {
+            if (!socket.connected && state.currentRoomCode) {
+                console.log('🔌 Window focused, checking connection...');
+                socket.connect();
+            }
+        });
+
+        // Handle socket reconnect event
+        socket.on('connect', () => {
+            console.log('🔌 Connected to server');
+            
+            // If we have saved state, try to rejoin
+            if (state.currentRoomCode) {
+                socket.emit('rejoin-room', {
+                    roomCode: state.currentRoomCode,
+                    userName: state.myName,
+                    isHost: state.isHost
+                }, (response) => {
+                    if (response.success) {
+                        console.log('✅ Auto-rejoined room after reconnect');
+                    }
+                });
+            } else {
+                // Check localStorage for saved session
+                attemptReconnect();
+            }
+        });
+
+        // Handle game resync after reconnection
+        socket.on('game-resync', (data) => {
+            console.log('🔄 Game state resynced');
+            updateGameUI(data);
+            switchScreen('gameScreen');
+        });
 
         // ==================== Utility Functions ====================
         function showToast(message, duration = 3000) {
@@ -1645,6 +1776,7 @@
 
                     copyToClipboard(response.roomCode);
                     showToast('Room berhasil dibuat! Share kode ke partner 🎉');
+                    saveState();
                 } else {
                     showToast(response.error || 'Gagal membuat room');
                     elements.createRoomBtn.disabled = false;
@@ -1682,6 +1814,10 @@
 
                     elements.codeSuccess.classList.add('show');
                     showToast(`Terhubung dengan room ${response.room.name}! 🎊`);
+
+                    state.partnerName = response.room.hostName;
+                    // Save state for reconnection
+                    saveState();
 
                     // Auto ready for guest
                     setTimeout(() => {
@@ -1762,6 +1898,7 @@
         }
 
         function resetGame() {
+            clearSavedState();
             state = {
                 currentMode: 'create',
                 roomCreated: false,
@@ -1873,9 +2010,11 @@
             elements.waitingContainer.classList.remove('show');
             elements.guestJoined.classList.add('show');
             
-            // Ubah text jadi "Memulai game..."
             elements.createRoomBtn.textContent = 'Memulai game...';
             elements.createRoomBtn.disabled = true;
+            
+            // Update saved state with partner name
+            saveState();
             
             showToast(`${data.guestName} bergabung! Game dimulai... 🎮`);
         });
