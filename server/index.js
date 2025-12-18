@@ -544,14 +544,14 @@ io.on('connection', (socket) => {
                     if (currentRoom && currentRoom.host.socketId === null) {
                         // Host didn't reconnect - notify guest and delete
                         if (currentRoom.guest && currentRoom.guest.socketId) {
-                            io.to(currentRoom.guest.socketId).emit('partner-disconnected', {
-                                message: 'Host meninggalkan room'
+                            io.to(currentRoom.guest.socketId).emit('room-closed', {
+                                message: 'Host tidak kembali. Room ditutup.'
                             });
                         }
                         rooms.delete(code);
                         console.log(`🗑️ Room deleted after grace period: ${code} | Active rooms: ${rooms.size}`);
                     }
-                }, 30000); // 30 second grace period
+                }, 15000); // 30 second grace period
 
             } else if (room.guest && room.guest.socketId === socket.id) {
                 // Guest disconnected - set grace period
@@ -563,20 +563,16 @@ io.on('connection', (socket) => {
                 setTimeout(() => {
                     const currentRoom = rooms.get(code);
                     if (currentRoom && currentRoom.guest && currentRoom.guest.socketId === null) {
-                        // Guest didn't reconnect - notify host
+                        // Guest didn't reconnect - notify host and DELETE room entirely
                         if (currentRoom.host.socketId) {
-                            io.to(currentRoom.host.socketId).emit('partner-disconnected', {
-                                message: 'Partner meninggalkan room'
+                            io.to(currentRoom.host.socketId).emit('room-closed', {
+                                message: 'Partner tidak kembali. Room ditutup.'
                             });
                         }
-                        currentRoom.guest = null;
-                        currentRoom.host.ready = false;
-                        currentRoom.gameState.started = false;
-                        currentRoom.gameState.currentCardIndex = 0;
-                        currentRoom.gameState.responses = [];
-                        console.log(`👋 Guest removed after grace period: ${code}`);
+                        rooms.delete(code);
+                        console.log(`🗑️ Room deleted after guest grace period: ${code} | Active rooms: ${rooms.size}`);
                     }
-                }, 30000); // 30 second grace period
+                }, 15000); // 30 second grace period
             }
         }
     });
