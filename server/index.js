@@ -527,31 +527,39 @@ io.on('connection', (socket) => {
     });
 
     // Disconnect
+    // Disconnect
     socket.on('disconnect', () => {
         console.log(`🔌 User disconnected: ${socket.id}`);
 
         // Find rooms this user was in
         for (const [code, room] of rooms.entries()) {
             if (room.host.socketId === socket.id) {
-                // Host disconnected - set grace period instead of immediate delete
-                console.log(`⏳ Host disconnected from room: ${code} - starting grace period`);
-                room.host.disconnectedAt = Date.now();
-                room.host.socketId = null; // Clear socket but keep room
+                // Check if guest has joined or game has started
+                if (!room.guest && !room.gameState.started) {
+                    // No guest yet - delete room immediately (no grace period)
+                    rooms.delete(code);
+                    console.log(`🗑️ Room deleted immediately (no guest): ${code} | Active rooms: ${rooms.size}`);
+                } else {
+                    // Guest exists or game started - use grace period
+                    console.log(`⏳ Host disconnected from room: ${code} - starting grace period`);
+                    room.host.disconnectedAt = Date.now();
+                    room.host.socketId = null; // Clear socket but keep room
 
-                // Set timeout to delete room if host doesn't reconnect
-                setTimeout(() => {
-                    const currentRoom = rooms.get(code);
-                    if (currentRoom && currentRoom.host.socketId === null) {
-                        // Host didn't reconnect - notify guest and delete
-                        if (currentRoom.guest && currentRoom.guest.socketId) {
-                            io.to(currentRoom.guest.socketId).emit('room-closed', {
-                                message: 'Host tidak kembali. Room ditutup.'
-                            });
+                    // Set timeout to delete room if host doesn't reconnect
+                    setTimeout(() => {
+                        const currentRoom = rooms.get(code);
+                        if (currentRoom && currentRoom.host.socketId === null) {
+                            // Host didn't reconnect - notify guest and delete
+                            if (currentRoom.guest && currentRoom.guest.socketId) {
+                                io.to(currentRoom.guest.socketId).emit('room-closed', {
+                                    message: 'Host tidak kembali. Room ditutup.'
+                                });
+                            }
+                            rooms.delete(code);
+                            console.log(`🗑️ Room deleted after grace period: ${code} | Active rooms: ${rooms.size}`);
                         }
-                        rooms.delete(code);
-                        console.log(`🗑️ Room deleted after grace period: ${code} | Active rooms: ${rooms.size}`);
-                    }
-                }, 15000); // 30 second grace period
+                    }, 15000);
+                }
 
             } else if (room.guest && room.guest.socketId === socket.id) {
                 // Guest disconnected - set grace period
@@ -572,7 +580,7 @@ io.on('connection', (socket) => {
                         rooms.delete(code);
                         console.log(`🗑️ Room deleted after guest grace period: ${code} | Active rooms: ${rooms.size}`);
                     }
-                }, 15000); // 30 second grace period
+                }, 15000);
             }
         }
     });
