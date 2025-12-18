@@ -2041,6 +2041,11 @@
             setTimeout(resetGame, 2000);
         });
 
+        socket.on('room-closed', (data) => {
+            showToast(data.message + ' 🚪', 5000);
+            resetGame();
+        });
+
         socket.on('reset-to-lobby', (data) => {
             showToast(data.message + ' 🔄', 3000);
             setTimeout(resetGame, 500);
