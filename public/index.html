@@ -1461,7 +1461,7 @@
 
     <script>
         // ==================== Socket.io Connection ====================
-        const backendURL = 'https://duduk-sebentar-production.up.railway.app';
+        const backendURL = 'http://localhost:3000';
         const socket = io(backendURL, {
             reconnection: true,
             reconnectionDelay: 1000,
@@ -1537,13 +1537,28 @@
 
         // ==================== State ====================
         // ==================== State ====================
+
+
+        function getUserId() {
+            let userId = localStorage.getItem('dudukSebentar_userId');
+            if (!userId) {
+                userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                localStorage.setItem('dudukSebentar_userId', userId);
+            }
+            return userId;
+        }
+
+        const USER_ID = getUserId();
+
         let state = {
             currentMode: 'create',
             roomCreated: false,
             currentRoomCode: null,
             isHost: false,
             partnerName: '',
-            myName: ''
+            myName: '',
+            clientTimeout: null,
+            userId: USER_ID
         };
 
         // Save state to localStorage for reconnection
@@ -1753,7 +1768,8 @@
 
             socket.emit('create-room', {
                 roomName: elements.roomName.value.trim(),
-                userName: state.myName
+                userName: state.myName,
+                userId: USER_ID
             }, (response) => {
                 if (response.success) {
                     state.roomCreated = true;
@@ -1777,6 +1793,22 @@
                     copyToClipboard(response.roomCode);
                     showToast('Room berhasil dibuat! Share kode ke partner 🎉');
                     saveState();
+                    
+                    // CLIENT-SIDE BACKUP TIMER (60 seconds)
+                    const clientTimeout = setTimeout(() => {
+                        if (state.roomCreated && !state.partnerName) {
+                            console.log('⏰ Client-side timeout: Room akan ditutup');
+                            
+                            // KASIH TAU SERVER BUAT DELETE ROOM
+                            socket.emit('close-room', { roomCode: response.roomCode });
+                            
+                            showToast('Room ditutup karena tidak ada yang join 😢', 5000);
+                            resetGame();
+                        }
+                    }, 61000); // 61 detik (sedikit lebih lama dari server)
+                    
+                    // Store timeout ID untuk bisa di-clear nanti
+                    state.clientTimeout = clientTimeout;
                 } else {
                     showToast(response.error || 'Gagal membuat room');
                     elements.createRoomBtn.disabled = false;
@@ -1805,7 +1837,8 @@
 
             socket.emit('join-room', {
                 roomCode: code,
-                userName: state.myName
+                userName: state.myName,
+                userId: USER_ID
             }, (response) => {
                 if (response.success) {
                     state.currentRoomCode = code;
@@ -1898,18 +1931,27 @@
         }
 
         function resetGame() {
+            // Clear client timeout if exists
+            if (state.clientTimeout) {
+                clearTimeout(state.clientTimeout);
+                state.clientTimeout = null;
+            }
+            
             clearSavedState();
+            const savedUserName = elements.userName.value; // Simpan nama user
+            
             state = {
                 currentMode: 'create',
                 roomCreated: false,
                 currentRoomCode: null,
                 isHost: false,
                 partnerName: '',
-                myName: ''
+                myName: '',
+                clientTimeout: null
             };
 
-            // Reset UI
-            elements.userName.value = '';
+            // Reset UI (tapi JANGAN clear userName)
+            elements.userName.value = savedUserName; // Restore nama user
             elements.roomName.value = '';
             elements.roomCode.value = '';
             elements.roomCodeDisplay.classList.remove('show');
@@ -2006,6 +2048,13 @@
 
         socket.on('guest-joined', (data) => {
             state.partnerName = data.guestName;
+            
+            // Clear client timeout karena guest udah join
+            if (state.clientTimeout) {
+                clearTimeout(state.clientTimeout);
+                state.clientTimeout = null;
+            }
+            
             elements.guestNameDisplay.textContent = data.guestName;
             elements.waitingContainer.classList.remove('show');
             elements.guestJoined.classList.add('show');
@@ -2042,8 +2091,19 @@
         });
 
         socket.on('room-closed', (data) => {
-            showToast(data.message + ' 🚪', 5000);
+            console.log('🚨 ROOM CLOSED EVENT RECEIVED:', data.message);
+            showToast(data.message + ' 😢', 5000);
+            
+            // Force reset immediately tanpa delay
             resetGame();
+            
+            // Reload page as last resort
+            setTimeout(() => {
+                if (state.currentRoomCode) {
+                    console.log('⚠️ State belum clear, force reload');
+                    window.location.reload();
+                }
+            }, 1000);
         });
 
         socket.on('reset-to-lobby', (data) => {
