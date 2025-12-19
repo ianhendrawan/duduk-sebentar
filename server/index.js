@@ -121,7 +121,7 @@ function selectRandomQuestions() {
 /**
  * Create a new room
  */
-function createRoom(roomName, hostName, hostSocketId) {
+function createRoom(roomName, hostName, hostSocketId, hostUserId) {
     const code = generateRoomCode();
     
     // Double-check: Pastikan code benar-benar belum ada (extra safety)
@@ -136,6 +136,7 @@ function createRoom(roomName, hostName, hostSocketId) {
         host: {
             socketId: hostSocketId,
             name: hostName,
+            userId: hostUserId,
             ready: false
         },
         guest: null,
@@ -147,11 +148,36 @@ function createRoom(roomName, hostName, hostSocketId) {
             responses: [], // { cardId, asker, responder, liked }
             totalRounds: 16 // 16 pertanyaan per sesi
         },
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        autoDeleteTimer: null
     };
     
     rooms.set(code, room);
-    console.log(`🏠 Room created: ${code} | Total active rooms: ${rooms.size}`);
+
+    // Auto-delete room after 1 minute if no guest joins
+    room.autoDeleteTimer = setTimeout(() => {
+        const currentRoom = rooms.get(code);
+        console.log(`⏰ Auto-delete timer triggered for room: ${code}`);
+        console.log(`   - Room exists: ${!!currentRoom}`);
+        console.log(`   - Has guest: ${!!currentRoom?.guest}`);
+        
+        if (currentRoom && !currentRoom.guest) {
+            // Notify host
+            if (currentRoom.host.socketId) {
+                console.log(`   - Notifying host: ${currentRoom.host.socketId}`);
+                io.to(currentRoom.host.socketId).emit('room-closed', {
+                    message: 'Room ditutup karena tidak ada yang join dalam 1 menit.'
+                });
+            }
+            rooms.delete(code);
+            console.log(`🗑️ Room auto-deleted after 1 minute (no guest): ${code} | Active rooms: ${rooms.size}`);
+        } else {
+            console.log(`   - Skipping delete (guest exists or room already deleted)`);
+        }
+    }, 60 * 1000); // 1 minute
+
+    console.log(`🏠 Room created: ${code} | Auto-delete timer set | Total active rooms: ${rooms.size}`);
+
     
     return room;
 }
@@ -191,11 +217,12 @@ io.on('connection', (socket) => {
     console.log(`🔌 User connected: ${socket.id}`);
 
     // Create Room
-    socket.on('create-room', ({ roomName, userName }, callback) => {
+    // Create Room
+    socket.on('create-room', ({ roomName, userName, userId }, callback) => {
         try {
-            const room = createRoom(roomName, userName, socket.id);
+            const room = createRoom(roomName, userName, socket.id, userId);  // Tambahin userId
             socket.join(room.code);
-            console.log(`🏠 ${userName} created room: ${room.code}`);
+            console.log(`🏠 ${userName} (${userId}) created room: ${room.code}`);
             
             callback({
                 success: true,
@@ -213,11 +240,18 @@ io.on('connection', (socket) => {
     });
 
     // Join Room
-    socket.on('join-room', ({ roomCode, userName }, callback) => {
+    socket.on('join-room', ({ roomCode, userName, userId }, callback) => {
         const room = rooms.get(roomCode.toUpperCase());
         
         if (!room) {
             return callback({ success: false, error: 'Room tidak ditemukan' });
+        }
+
+        if (room.host.userId === userId) {
+            return callback({ 
+                success: false, 
+                error: 'Lo ga bisa join room sendiri! Ini room lo yang bikin 😅' 
+            });
         }
         
         if (room.guest) {
@@ -234,6 +268,13 @@ io.on('connection', (socket) => {
             name: userName,
             ready: true // Auto ready
         };
+
+        // Cancel auto-delete timer since guest joined
+        if (room.autoDeleteTimer) {
+            clearTimeout(room.autoDeleteTimer);
+            room.autoDeleteTimer = null;
+            console.log(`⏰ Auto-delete timer cancelled for room: ${roomCode}`);
+        }
 
         socket.join(roomCode);
         console.log(`🚪 ${userName} joined room: ${roomCode}`);
@@ -427,6 +468,34 @@ io.on('connection', (socket) => {
         console.log(`🗑️ Room deleted after play again: ${roomCode} | Active rooms: ${rooms.size}`);
     });
 
+    // Close Room (dipanggil client ketika timeout atau cancel)
+    socket.on('close-room', ({ roomCode }) => {
+        const room = rooms.get(roomCode);
+        if (!room) return;
+
+        // Verify yang request adalah host
+        if (room.host.socketId !== socket.id) return;
+
+        console.log(`🚪 Host manually closing room: ${roomCode}`);
+
+        // Clear auto-delete timer if exists
+        if (room.autoDeleteTimer) {
+            clearTimeout(room.autoDeleteTimer);
+            room.autoDeleteTimer = null;
+        }
+
+        // Notify guest if exists
+        if (room.guest && room.guest.socketId) {
+            io.to(room.guest.socketId).emit('room-closed', {
+                message: 'Host menutup room.'
+            });
+        }
+
+        // Delete room
+        rooms.delete(roomCode);
+        console.log(`🗑️ Room closed by host: ${roomCode} | Active rooms: ${rooms.size}`);
+    });
+
     // WebRTC Signaling - ICE Candidate
     socket.on('webrtc-ice-candidate', ({ roomCode, candidate }) => {
         const room = rooms.get(roomCode);
@@ -440,8 +509,6 @@ io.on('connection', (socket) => {
             io.to(targetSocketId).emit('webrtc-ice-candidate', { candidate });
         }
     });
-
-    // Disconnect
 
     // Rejoin Room (untuk reconnect setelah disconnect)
     socket.on('rejoin-room', ({ roomCode, userName, isHost }, callback) => {
@@ -527,8 +594,6 @@ io.on('connection', (socket) => {
     });
 
     // Disconnect
-    // Disconnect
-    // Disconnect
     socket.on('disconnect', () => {
         console.log(`🔌 User disconnected: ${socket.id}`);
 
@@ -540,9 +605,37 @@ io.on('connection', (socket) => {
             if (room.host.socketId === socket.id) {
                 // Check if guest has joined or game has started
                 if (!room.guest && !room.gameState.started) {
-                    // No guest yet - delete room immediately (no grace period)
-                    rooms.delete(code);
-                    console.log(`🗑️ Room deleted immediately (no guest): ${code} | Active rooms: ${rooms.size}`);
+                    // Check if room is less than 1 minute old
+                    const roomAge = Date.now() - room.createdAt;
+                    const oneMinute = 60 * 1000;
+                    
+                    if (roomAge < oneMinute) {
+                        // Room masih baru (kurang dari 1 menit) - beri grace period
+                        console.log(`⏳ Host disconnected from new room: ${code} - room age: ${Math.round(roomAge/1000)}s`);
+                        room.host.disconnectedAt = Date.now();
+                        room.host.socketId = null;
+                        
+                        // Timeout sesuai sisa waktu sampai 1 menit
+                        const remainingTime = oneMinute - roomAge;
+                        setTimeout(() => {
+                            const currentRoom = rooms.get(code);
+                            if (currentRoom && currentRoom.host.socketId === null && !currentRoom.guest) {
+                                // Cancel auto-delete timer if exists
+                                if (currentRoom.autoDeleteTimer) {
+                                    clearTimeout(currentRoom.autoDeleteTimer);
+                                }
+                                rooms.delete(code);
+                                console.log(`🗑️ Room deleted after grace period (no guest joined): ${code} | Active rooms: ${rooms.size}`);
+                            }
+                        }, remainingTime);
+                    } else {
+                        // Room sudah lebih dari 1 menit dan belum ada guest - hapus langsung
+                        if (room.autoDeleteTimer) {
+                            clearTimeout(room.autoDeleteTimer);
+                        }
+                        rooms.delete(code);
+                        console.log(`🗑️ Room deleted immediately (>1 min, no guest): ${code} | Active rooms: ${rooms.size}`);
+                    }
                 } else if (gameFinished) {
                     // Game already finished - delete room immediately
                     if (room.guest && room.guest.socketId) {
@@ -617,6 +710,10 @@ setInterval(() => {
 
     for (const [code, room] of rooms.entries()) {
         if (now - room.createdAt > maxAge) {
+            // Clear auto-delete timer if exists
+            if (room.autoDeleteTimer) {
+                clearTimeout(room.autoDeleteTimer);
+            }
             rooms.delete(code);
             console.log(`🧹 Cleaned up old room: ${code} | Active rooms: ${rooms.size}`);
         }
