@@ -1461,7 +1461,7 @@
 
     <script>
         // ==================== Socket.io Connection ====================
-        const backendURL = 'https://duduk-sebentar-production.up.railway.app';
+        const backendURL = 'http://localhost:3000';
         const socket = io(backendURL, {
             reconnection: true,
             reconnectionDelay: 1000,
@@ -1805,7 +1805,7 @@
                             showToast('Room ditutup karena tidak ada yang join 😢', 5000);
                             resetGame();
                         }
-                    }, 61000); // 61 detik (sedikit lebih lama dari server)
+                    }, 41000); // 41 detik (sedikit lebih lama dari server)
                     
                     // Store timeout ID untuk bisa di-clear nanti
                     state.clientTimeout = clientTimeout;
@@ -2055,12 +2055,24 @@
                 state.clientTimeout = null;
             }
             
-            elements.guestNameDisplay.textContent = data.guestName;
-            elements.waitingContainer.classList.remove('show');
-            elements.guestJoined.classList.add('show');
-            
-            elements.createRoomBtn.textContent = 'Memulai game...';
-            elements.createRoomBtn.disabled = true;
+            // ===== TAMBAHKAN KODE INI =====
+            // Jika kita guest yang baru join, update UI
+            if (!state.isHost) {
+                elements.waitingContainer.classList.remove('show');
+                elements.guestJoined.classList.add('show');
+                elements.guestNameDisplay.textContent = state.partnerName;
+                showToast('Host kembali! Game akan segera dimulai... 🎮');
+            } else {
+            // ===== AKHIR BAGIAN BARU =====
+                elements.guestNameDisplay.textContent = data.guestName;
+                elements.waitingContainer.classList.remove('show');
+                elements.guestJoined.classList.add('show');
+                
+                elements.createRoomBtn.textContent = 'Memulai game...';
+                elements.createRoomBtn.disabled = true;
+            // ===== TAMBAHKAN KURUNG TUTUP INI =====
+            }
+            // ===== AKHIR =====
             
             // Update saved state with partner name
             saveState();
