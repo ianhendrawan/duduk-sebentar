@@ -279,6 +279,44 @@ io.on('connection', (socket) => {
         socket.join(roomCode);
         console.log(`🚪 ${userName} joined room: ${roomCode}`);
 
+        if (!room.host.socketId) {
+            console.log(`⚠️ Guest joined but host is disconnected in room: ${roomCode}`);
+            
+            // Notify guest that host is disconnected
+            callback({
+                success: true,
+                room: {
+                    code: room.code,
+                    name: room.name,
+                    hostName: room.host.name,
+                    guestName: userName
+                },
+                warning: 'Host sedang tidak terhubung'
+            });
+
+            // Set 30-second timer to delete room if host doesn't reconnect
+            setTimeout(() => {
+                const currentRoom = rooms.get(roomCode);
+                if (currentRoom && currentRoom.host.socketId === null) {
+                    // Host didn't reconnect within 30 seconds
+                    if (currentRoom.guest && currentRoom.guest.socketId) {
+                        io.to(currentRoom.guest.socketId).emit('room-closed', {
+                            message: 'Host tidak kembali dalam 30 detik. Room ditutup.'
+                        });
+                    }
+                    // Cancel auto-delete timer if exists
+                    if (currentRoom.autoDeleteTimer) {
+                        clearTimeout(currentRoom.autoDeleteTimer);
+                    }
+                    rooms.delete(roomCode);
+                    console.log(`🗑️ Room deleted (host didn't reconnect after guest joined): ${roomCode} | Active rooms: ${rooms.size}`);
+                }
+            }, 30000); // 30 seconds
+
+            return; // Stop here, don't start game
+        }
+        // ===== AKHIR KODE TAMBAHAN =====
+
         // Notify host that guest joined
         io.to(room.host.socketId).emit('guest-joined', {
             guestName: userName
@@ -525,6 +563,47 @@ io.on('connection', (socket) => {
                 room.host.disconnectedAt = null;
                 socket.join(roomCode);
                 console.log(`🔄 Host reconnected to room: ${roomCode}`);
+
+                // ===== TAMBAHKAN KODE INI =====
+                // Cek apakah guest sudah join dan menunggu
+                if (room.guest && room.guest.socketId && !room.gameState.started) {
+                    console.log(`🎮 Host reconnected, guest is waiting. Auto-starting game in room: ${roomCode}`);
+                    
+                    // Notify guest that host is back
+                    io.to(room.guest.socketId).emit('guest-joined', {
+                        guestName: room.guest.name
+                    });
+
+                    // Auto start game after 1.5 seconds
+                    setTimeout(() => {
+                        const currentRoom = rooms.get(roomCode);
+                        if (!currentRoom || currentRoom.gameState.started) return;
+
+                        currentRoom.gameState.started = true;
+                        currentRoom.gameState.currentTurn = 'host';
+
+                        const firstCard = currentRoom.gameState.cards[0];
+
+                        // Send game start to both players
+                        io.to(currentRoom.host.socketId).emit('game-start', {
+                            yourTurn: true,
+                            card: firstCard,
+                            partnerName: currentRoom.guest.name,
+                            roundNumber: 1,
+                            totalRounds: currentRoom.gameState.totalRounds
+                        });
+
+                        io.to(currentRoom.guest.socketId).emit('game-start', {
+                            yourTurn: false,
+                            card: null,
+                            partnerName: currentRoom.host.name,
+                            roundNumber: 1,
+                            totalRounds: currentRoom.gameState.totalRounds
+                        });
+
+                        console.log(`🎮 Game auto-started after host reconnect in room: ${roomCode}`);
+                    }, 1500);
+                }
 
                 callback({
                     success: true,
